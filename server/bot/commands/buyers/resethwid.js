@@ -1,86 +1,45 @@
 const { SlashCommandBuilder } = require('@discordjs/builders')
 const { MessageEmbed } = require('discord.js')
 const User = require('../../../models/User')
-
 const Server = require('../../../models/Server')
 
-function daysToMs(days) {
-    return ((24 * 60 * 60) * parseInt(days)) * 1000
-}
-
-function msToTime(ms, current) {
-    return (parseInt(ms) + parseInt(current))
-}
-
-function msToDays(ms) {
-    return Math.floor(parseInt(ms) / (1000 * 60 * 60 * 24))
-}
-
-function msToHours(ms) {
-    return Math.floor((parseInt(ms) / (1000 * 60 * 60)) % 60)
-}
-
-function msToMinutes(ms) {
-    return Math.floor(parseInt(ms) / (1000 * 60) % 60)
+function msTo(ms, unit) {
+    const units = {days: 24*60*60*1000, hours: 60*60*1000, minutes: 60*1000};
+    return Math.floor(ms / units[unit]);
 }
 
 module.exports = {
-    data: new SlashCommandBuilder()
-        .setName('resethwid')
-        .setDescription('Resets your HWID back to an empty value.'),
+    data: new SlashCommandBuilder().setName('resethwid').setDescription('Resets your HWID back to an empty value.'),
     async execute(interaction) {
-        let user = await User.findOne({ discord_id: interaction.member.id })
-        let server_find = await Server.find()
-        let guild_constants = server_find[0]
-
-        if (!user) {
-            await User.create({
-                discord_id: interaction.user.id,
-                key: "NO_KEY",
-                hwid: "NO_HWID",
-                timezone: "NO_TIMEZONE",
-                blacklisted: false,
-                blacklistedFor: 0,
-                violations: 0,
-                whitelisted: false,
-                whitelistAccess: false,
-                lastHWIDReset: 0,
-                beforeReset: 0
-            })
-
-            user = await User.findOne({ discord_id: interaction.user.id })
-        }
-
-        if (user.whitelisted == false) {
-            const fEmbed = new MessageEmbed()
-                .setColor(0x2F3136)
-                .setTitle(' ')
-                .setDescription(':x: You do not have permission to use this command!')
-                .setTimestamp()
-                .setFooter({ text: ' ' })
-            return interaction.reply({ embeds: [fEmbed], ephemeral: true })
-        }
-        
+        let guild_constants = (await Server.find())[0]
         const current_time = new Date().getTime()
-        const is_on_cooldown = user.lastHWIDReset > current_time
+        const cooldown_time = current_time + guild_constants.cooldown_amount * 24*60*60*1000;
+        
+        let user = await User.findOneAndUpdate(
+            { discord_id: interaction.member.id },
+            { $setOnInsert: { discord_id: interaction.user.id, hwid: '', key: "NO_KEY", whitelisted: false, lastHWIDReset: 0, beforeReset: 0 } },
+            { new: true, upsert: true }
+        )
 
-        if (is_on_cooldown) {
+        if (!user.whitelisted) {
+            return interaction.reply({ 
+                embeds: [new MessageEmbed().setColor(0x2F3136).setDescription(':x: You do not have permission to use this command!')], 
+                ephemeral: true 
+            })
+        }
+
+        if (user.lastHWIDReset > current_time) {
             return interaction.reply({ embeds: [new MessageEmbed()
                 .setColor(0x2F3136)
-                .setTitle(' ')
-                .setDescription(`:x: You are on cooldown! Please wait \`\`${msToDays(user.lastHWIDReset - user.beforeReset)}\`\` day(s), \`\`${msToHours(user.lastHWIDReset - user.beforeReset)}\`\` hour(s), \`\`${msToMinutes(user.lastHWIDReset - user.beforeReset)}\`\` minute(s) to be able to reset your HWID again.`)
-                .setTimestamp()
-                .setFooter({ text: ' ' })] })
+                .setDescription(`:x: You are on cooldown! Please wait ${msTo(user.lastHWIDReset - user.beforeReset, 'days')} day(s), ${msTo(user.lastHWIDReset - user.beforeReset, 'hours')} hour(s), ${msTo(user.lastHWIDReset - user.beforeReset, 'minutes')} minute(s) to be able to reset your HWID again.`)
+            ]})
         }
 
-        const cooldown_time = msToTime(daysToMs(guild_constants.cooldown_amount), current_time)
-        await user.updateOne({ lastHWIDReset: cooldown_time, beforeReset: current_time, hwid: '' })
+        await User.updateOne({ discord_id: interaction.member.id }, { lastHWIDReset: cooldown_time, beforeReset: current_time, hwid: '' })
 
         await interaction.reply({ embeds: [new MessageEmbed()
             .setColor(0x2F3136)
-            .setTitle(' ')
-            .setDescription(`✅ Successfully reset your HWID. You will be able to reset your HWID again in \`\`${msToDays(cooldown_time - current_time)}\`\` day(s), \`\`${msToHours(cooldown_time - current_time)}\`\` hour(s), \`\`${msToMinutes(cooldown_time - current_time)}\`\` minute(s).`)
-            .setTimestamp()
-            .setFooter({ text: ' ' })] })
+            .setDescription(`✅ Successfully reset your HWID. You will be able to reset your HWID again in ${msTo(cooldown_time - current_time, 'days')} day(s), ${msTo(cooldown_time - current_time, 'hours')} hour(s), ${msTo(cooldown_time - current_time, 'minutes')} minute(s).`)
+        ]})
     }
 }
